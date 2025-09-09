@@ -1,0 +1,181 @@
+services:
+  # Zookeeper service (required for Kafka)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo 'ruok' | nc localhost 2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kafka service
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    hostname: kafka
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_CONFLUENT_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    healthcheck:
+      test: ["CMD", "bash", "-c", "unset JMX_PORT; kafka-topics --bootstrap-server kafka:29092 --list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # PostgreSQL Database for Authentication
+  authentication-db:
+    image: postgres:15
+    container_name: authentication-db
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - auth_postgres_data:/var/lib/postgresql/data
+      - ./authentication/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Authentication service
+  authentication:
+    build: ./authentication
+    container_name: authentication-service
+    depends_on:
+      authentication-db:
+        condition: service_healthy
+    ports:
+      - "8001:8001"
+    environment:
+      - PORT=8001
+      - DB_NAME=postgres
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_HOST=authentication-db
+      - DB_PORT=5432
+    restart: unless-stopped
+
+  # FastAPI Producer service
+  producer:
+    build: ./produce
+    container_name: fastapi-producer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      authentication:
+        condition: service_started
+    ports:
+      - "8000:8000"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - AUTH_SERVICE_BASE_URL=http://authentication:8001
+    volumes:
+      - ./produce/src:/app/src
+    restart: unless-stopped
+
+  # PostgreSQL Database for Consumer
+  consumer-db:
+    image: postgres:15
+    container_name: consumer-db
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"  # Different port to avoid conflict with auth DB
+    volumes:
+      - consumer_postgres_data:/var/lib/postgresql/data
+      - ./consume/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Consumer service - Instance 1
+  consumer-1:
+    build: ./consume
+    container_name: fastapi-consumer-1
+    depends_on:
+      kafka:
+        condition: service_healthy
+      authentication:
+        condition: service_started
+      consumer-db:
+        condition: service_healthy
+    ports:
+      - "8002:8002"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - AUTH_SERVICE_BASE_URL=http://authentication:8001
+      - PORT=8002
+      - DB_NAME=postgres
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_HOST=consumer-db
+      - DB_PORT=5432
+      - INSTANCE_NAME=consumer-instance-1
+    volumes:
+      - ./consume/src:/app/src
+    restart: unless-stopped
+
+  # FastAPI Consumer service - Instance 2
+  consumer-2:
+    build: ./consume
+    container_name: fastapi-consumer-2
+    depends_on:
+      kafka:
+        condition: service_healthy
+      authentication:
+        condition: service_started
+      consumer-db:
+        condition: service_healthy
+    ports:
+      - "8003:8002"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - AUTH_SERVICE_BASE_URL=http://authentication:8001
+      - PORT=8002
+      - DB_NAME=postgres
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_HOST=consumer-db
+      - DB_PORT=5432
+      - INSTANCE_NAME=consumer-instance-2
+    volumes:
+      - ./consume/src:/app/src
+    restart: unless-stopped
+
+networks:
+  default:
+    driver: bridge
+
+volumes:
+  auth_postgres_data:
+  consumer_postgres_data:

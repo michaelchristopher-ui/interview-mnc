@@ -88,7 +88,6 @@ def create_user(username: str, password: str):
     conn.close()
 
 # Endpoints
-
 @app.post("/create")
 def create(user: UserCreate):
     if get_user(user.username):

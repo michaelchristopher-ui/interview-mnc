@@ -1,7 +1,90 @@
-# Authentication
+# Kafka Consumer Service
 
-## Overview
-This project is a Python application that implements core functionality defined in the `src/main.py` file. It includes unit tests to ensure the code behaves as expected.
+This service consumes messages from Kafka and stores them in a PostgreSQL database.
+
+## Architecture
+
+- **FastAPI**: Web framework for the consumer service
+- **Kafka Consumer**: Consumes messages from the `servicea-topic`
+- **PostgreSQL**: Database to store consumed messages
+- **Docker**: Containerized deployment
+
+## Prerequisites
+
+1. Make sure the producer service is running (with Kafka) from the `../produce` directory
+2. Docker and Docker Compose installed
+
+## Database Schema
+
+The service creates a `produce_messages` table with:
+- `id`: Serial primary key
+- `name`: Unique varchar(255)
+- `count`: Integer
+- `amount`: Float
+
+## Running the Service
+
+### Using Docker Compose
+
+```bash
+# Build and start the consumer service
+docker-compose up --build
+
+# Run in detached mode
+docker-compose up -d --build
+
+# View logs
+docker-compose logs -f fastapi-consumer
+
+# Stop the service
+docker-compose down
+```
+
+### Configuration
+
+The service uses the following ports:
+- **Consumer App**: `8002` (mapped to container port 8001)
+- **Database**: `5433` (mapped to container port 5432)
+
+Environment variables:
+- `KAFKA_BOOTSTRAP_SERVERS`: Kafka broker address (default: `host.docker.internal:9092`)
+- `DB_HOST`: Database host (default: `consume-db`)
+- `DB_PORT`: Database port (default: `5432`)
+- `DB_NAME`: Database name (default: `postgres`)
+- `DB_USER`: Database user (default: `postgres`)
+- `DB_PASSWORD`: Database password (default: `postgres`)
+
+## API Endpoints
+
+- `GET /status`: Returns the status of the Kafka consumer
+
+## Development
+
+### Local Development
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the application
+python src/main.py
+```
+
+The application will start on `http://localhost:8001`
+
+### Testing
+
+```bash
+# Run tests
+pytest tests/
+```
+
+## Notes
+
+- The consumer runs in a background thread and continuously processes messages from Kafka
+- Database connections are managed per operation
+- The service includes automatic reconnection logic for Kafka failures
+- Duplicate messages are handled with `ON CONFLICT (name) DO NOTHING`
 
 ## Project Structure
 ```
