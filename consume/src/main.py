@@ -60,51 +60,76 @@ def insert_message_to_db(name: str, count: int, amount: float):
 def kafka_consumer_worker():
     """Kafka consumer worker with proper shutdown handling"""
     consumer = None
-    while not shutdown_event.is_set():
-        try:
-            print(f"Starting Kafka consumer {INSTANCE_NAME} with servers: {KAFKA_BOOTSTRAP_SERVERS}")
-            consumer = KafkaConsumer(
-                KAFKA_TOPIC,
-                bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-                auto_offset_reset='earliest',
-                enable_auto_commit=False,  # Manual commit to ensure message processing
-                group_id="consume-group",
-                value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-                consumer_timeout_ms=1000
-            )
-            
-            for msg in consumer:
-                # Check for shutdown signal
-                if shutdown_event.is_set():
-                    print("Shutdown signal received, stopping message processing")
-                    break
-                    
-                data = msg.value
-                try:
-                    insert_message_to_db(
-                        name=data["Name"],
-                        count=data["Count"],
-                        amount=data["Amount"]
-                    )
-                    # Only commit if database insertion was successful
-                    consumer.commit()
-                    print(f"{INSTANCE_NAME} consumed message {json.dumps(data)}")
-                except Exception as db_exc:
-                    print(f"Failed to insert message to database: {db_exc}")
-                    # Don't commit the message, it will be retried
-                    continue
-                    
-        except Exception as e:
-            if not shutdown_event.is_set():
-                print(f"Kafka consumer error: {e}")
-                time.sleep(5)  # Wait before retrying
-        finally:
-            if consumer:
-                print("Closing Kafka consumer...")
-                consumer.close()
-                consumer = None
     
-    print("Kafka consumer worker thread stopped")
+    try:
+        print(f"Starting Kafka consumer {INSTANCE_NAME} with servers: {KAFKA_BOOTSTRAP_SERVERS}")
+        consumer = KafkaConsumer(
+            KAFKA_TOPIC,
+            bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+            auto_offset_reset='earliest',
+            enable_auto_commit=False,  # Manual commit to ensure message processing
+            group_id="consume-group",
+            value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+            consumer_timeout_ms=1000  # Short timeout to check shutdown signal
+        )
+        print(f"Kafka consumer {INSTANCE_NAME} connected successfully")
+        
+        while not shutdown_event.is_set():
+            try:
+                # Poll for messages with timeout
+                message_batch = consumer.poll(timeout_ms=1000)
+                
+                if not message_batch:
+                    # No messages received, continue loop to check shutdown
+                    continue
+                
+                # Process messages
+                for topic_partition, messages in message_batch.items():
+                    for msg in messages:
+                        if shutdown_event.is_set():
+                            print("Shutdown signal received, stopping message processing")
+                            return
+                            
+                        data = msg.value
+                        try:
+                            insert_message_to_db(
+                                name=data["Name"],
+                                count=data["Count"],
+                                amount=data["Amount"]
+                            )
+                            print(f"{INSTANCE_NAME} consumed message {json.dumps(data)}")
+                        except Exception as db_exc:
+                            print(f"Failed to insert message to database: {db_exc}")
+                            # Skip this message and continue
+                            continue
+                
+                # Commit all successfully processed messages
+                try:
+                    consumer.commit()
+                except Exception as commit_exc:
+                    print(f"Failed to commit messages: {commit_exc}")
+                    
+            except Exception as poll_exc:
+                if not shutdown_event.is_set():
+                    print(f"Error polling messages: {poll_exc}")
+                    # Short delay before retrying
+                    time.sleep(1)
+                    
+    except Exception as e:
+        print(f"Kafka consumer error: {e}")
+        print("Consumer will attempt to reconnect...")
+        if not shutdown_event.is_set():
+            time.sleep(5)  # Wait before allowing restart
+    finally:
+        if consumer:
+            print(f"Closing Kafka consumer for {INSTANCE_NAME}...")
+            try:
+                consumer.close()
+            except Exception as close_exc:
+                print(f"Error closing consumer: {close_exc}")
+            consumer = None
+    
+    print(f"Kafka consumer worker for {INSTANCE_NAME} stopped")
 
 
 # Use FastAPI lifespan for background thread management
