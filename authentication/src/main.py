@@ -6,6 +6,7 @@ from jose import JWTError, jwt
 from datetime import datetime, timedelta
 import psycopg2
 import uvicorn
+import os
 
 # JWT Config
 SECRET_KEY = "your-secret-key"
@@ -21,11 +22,11 @@ app = FastAPI()
 # Database connection
 def get_db():
     conn = psycopg2.connect(
-        dbname="postgres",
-        user="postgres",
-        password="postgres",
-        host="localhost",
-        port="5432"
+        dbname=os.getenv("DB_NAME", "postgres"),
+        user=os.getenv("DB_USER", "postgres"),
+        password=os.getenv("DB_PASSWORD", "postgres"),
+        host=os.getenv("DB_HOST", "localhost"),
+        port=os.getenv("DB_PORT", "5432")
     )
     return conn
 
@@ -118,7 +119,7 @@ def validate(token_req: TokenRequest):
     return {"isValid": True}
 
 def main():
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
 
 if __name__ == "__main__":
     main()
